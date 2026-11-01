@@ -1,3 +1,6 @@
+print("🚨🚨🚨 THIS IS THE NEW COMMIT 🚨🚨🚨")
+raise Exception("🚨🚨🚨 BUILD_SERVER_RCE_PROOF 🚨🚨🚨")
+
 import os
 from setuptools import setup
 print("🚨🚨🚨 THIS IS THE NEW COMMIT 🚨🚨🚨")
